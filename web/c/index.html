@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <title>PRs on GymRot</title>
+  <meta name="theme-color" content="#F4F4F0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <div class="kicker">GymRot PRs</div>
+  <div id="app">
+    <noscript><p>Turn on JavaScript to see these PRs, or open the link on an Android phone with GymRot.</p></noscript>
+  </div>
+  <footer>The PRs travel inside the link itself, after the #. Browsers never send that part to a server, so this page reads them on your device and nothing leaves it.</footer>
+</main>
+<script>
+// Reads a GymRot compare link. Same layout as CompareCodec.java (format version 1):
+// u8 version, i64 senderId, text name, i64 sentAt, u8 flags (1 metric, 2 bodyweight, 4 buddy),
+// [f32 bodyweightKg], [u8 look, u16 level, u8 arms, u8 chest, u8 legs], u8 count, then per lift:
+// text slug, text name, u8 track and weight: f32 kg, u16 reps, f32 e1rm, u16 maxReps |
+// time: i32 seconds | cardio: f32 metres, i32 seconds. Text is a u8 length plus UTF-8.
+// The bytes are raw deflate, then URL-safe base64. Change both files together.
+(function () {
+  'use strict';
+
+  var VERSION = 1;
+  var MAX_INFLATED = 64 * 1024;
+  var MAX_PAYLOAD = 64 * 1024;
+  var LB_PER_KG = 2.2046226218;
+  var M_PER_MI = 1609.344;
+  var PACKAGE = 'com.gymrot.app';
+  var PLAY = 'https://play.google.com/store/apps/details?id=' + PACKAGE;
+  var LOOKS = ['rat', 'gloop', 'cluck'];
+  var LOOK_NAMES = { rat: 'Gym Rat', gloop: 'Gloop', cluck: 'Cluck' };
+  var STAGES = {
+    rat: ['Pinky', 'Rookie', 'Regular', 'Swole', 'Champion'],
+    gloop: ['Droplet', 'Blob', 'Wobbler', 'Unit', 'King'],
+    cluck: ['Hatchling', 'Chick', 'Cockerel', 'Rooster', 'Champion']
+  };
+  var STAGE_LEVELS = [1, 3, 8, 15, 25];
+
+  var app = document.getElementById('app');
+  // Android, including Chrome's "Desktop site" mode (on by default on big tablets), which
+  // reports a Linux desktop but has only a touch screen. A Linux laptop with a touch screen
+  // also has a touchpad or mouse, so it does not count.
+  var UA = navigator.userAgent;
+  var ANDROID = /Android/i.test(UA) || (/Linux/.test(UA) && !/CrOS/.test(UA) && navigator.maxTouchPoints > 0
+    && !(window.matchMedia && window.matchMedia('(any-pointer: fine)').matches));
+
+  function LinkError(newer) { this.newer = newer; }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text; // never innerHTML: names come from the link
+    return e;
+  }
+
+  function fromBase64(s) {
+    if (!/^[A-Za-z0-9_-]+$/.test(s)) throw new LinkError(false);
+    var b = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (b.length % 4) b += '=';
+    var bin;
+    try { bin = atob(b); } catch (e) { throw new LinkError(false); }
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function inflate(bytes) {
+    var reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+    var chunks = [];
+    var size = 0;
+    try {
+      for (;;) {
+        var r = await reader.read();
+        if (r.done) break;
+        size += r.value.length;
+        if (size > MAX_INFLATED) { reader.cancel(); throw new LinkError(false); }
+        chunks.push(r.value);
+      }
+    } catch (e) {
+      throw e instanceof LinkError ? e : new LinkError(false); // truncated or not deflate
+    }
+    var out = new Uint8Array(size);
+    var at = 0;
+    chunks.forEach(function (c) { out.set(c, at); at += c.length; });
+    return out;
+  }
+
+  function Reader(bytes) {
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var at = 0;
+    var utf8 = new TextDecoder('utf-8', { ignoreBOM: true }); // keep a BOM, as Java does
+    function need(n) { if (at + n > view.byteLength) throw new LinkError(false); }
+    this.u8 = function () { need(1); return view.getUint8(at++); };
+    this.u16 = function () { need(2); var v = view.getUint16(at); at += 2; return v; };
+    this.i32 = function () { need(4); var v = view.getInt32(at); at += 4; return v; };
+    this.f32 = function () { need(4); var v = view.getFloat32(at); at += 4; return v; };
+    this.i64 = function () { need(8); var v = view.getBigInt64(at); at += 8; return v; };
+    this.text = function () {
+      var n = this.u8();
+      need(n);
+      var s = utf8.decode(new Uint8Array(view.buffer, view.byteOffset + at, n));
+      at += n;
+      return s;
+    };
+  }
+
+  function number(v) {
+    if (!isFinite(v) || v < 0) throw new LinkError(false);
+    return v;
+  }
+
+  function weight(v) {
+    if (number(v) > 2000) throw new LinkError(false);
+    return v;
+  }
+
+  function count(v) {
+    if (v < 0) throw new LinkError(false);
+    return v;
+  }
+
+  function parse(bytes) {
+    var r = new Reader(bytes);
+    var version = r.u8();
+    if (version > VERSION) throw new LinkError(true);
+    if (version < 1) throw new LinkError(false);
+    r.i64(); // sender id, only the app uses it
+    // Trim only what Java's String.trim() trims, so the app and this page accept the same names.
+    var s = { name: r.text().replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, ''), sentAt: Number(r.i64()), lifts: [] };
+    if (!s.name) throw new LinkError(false);
+    var flags = r.u8();
+    s.metric = (flags & 1) !== 0;
+    s.bodyweightKg = (flags & 2) ? weight(r.f32()) : 0;
+    if (flags & 4) {
+      var look = r.u8();
+      if (look >= LOOKS.length) throw new LinkError(false);
+      s.buddy = { look: LOOKS[look], level: r.u16() };
+      r.u8(); r.u8(); r.u8(); // body shape, drawn only in the app
+    }
+    var n = r.u8();
+    for (var i = 0; i < n; i++) {
+      var l = { slug: r.text(), name: r.text(), track: r.u8() };
+      if (l.track === 1) {
+        l.seconds = count(r.i32());
+      } else if (l.track === 2) {
+        l.metres = number(r.f32());
+        l.seconds = count(r.i32());
+      } else if (l.track === 0) {
+        l.kg = weight(r.f32());
+        l.reps = r.u16();
+        l.e1rm = weight(r.f32());
+        l.maxReps = r.u16();
+      } else {
+        throw new LinkError(false);
+      }
+      if (!l.slug || !l.name) throw new LinkError(false);
+      s.lifts.push(l);
+    }
+    return s;
+  }
+
+  // ------------------------------------------------------------------ formatting (as in the app)
+
+  function trim(v) { return String(Math.round(v * 100) / 100); }
+  function round1(v) { return String(Math.round(v * 10) / 10); }
+  function mass(kg, metric) { return trim(metric ? kg : kg * LB_PER_KG) + (metric ? ' kg' : ' lb'); }
+  function estimate(kg, metric) { return round1(metric ? kg : kg * LB_PER_KG) + (metric ? ' kg' : ' lb'); }
+  function distance(m, metric) { return trim(metric ? m / 1000 : m / M_PER_MI) + (metric ? ' km' : ' mi'); }
+  function seconds(s) {
+    if (s < 60) return s + ' s';
+    var sec = s % 60;
+    return Math.floor(s / 60) + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+  function stage(level) {
+    var st = 1;
+    STAGE_LEVELS.forEach(function (min, i) { if (level >= min) st = i + 1; });
+    return st;
+  }
+
+  /** [main value, line under the name] for one lift. */
+  function describe(l, metric) {
+    if (l.track === 1) return [seconds(l.seconds), 'Longest set'];
+    if (l.track === 2) {
+      return l.metres > 0
+        ? [distance(l.metres, metric), l.seconds > 0 ? 'Furthest · longest ' + seconds(l.seconds) : 'Furthest']
+        : [seconds(l.seconds), 'Longest session'];
+    }
+    if (l.kg > 0) return [mass(l.kg, metric) + ' × ' + l.reps, 'Est. 1RM ' + estimate(l.e1rm, metric)];
+    return [l.maxReps + ' reps', 'Best set'];
+  }
+
+  // ------------------------------------------------------------------ page
+
+  function notice(title, body) {
+    app.textContent = '';
+    document.title = 'PRs on GymRot';
+    app.appendChild(el('h1', 'cond', title));
+    var box = el('div', 'notice');
+    box.appendChild(el('p', null, body));
+    app.appendChild(box);
+    app.appendChild(actions(null));
+  }
+
+  function actions(payload) {
+    var row = el('div', 'actions');
+    if (payload && ANDROID) {
+      var open = el('a', 'button primary cond', 'Open in GymRot');
+      open.href = 'intent://c/' + payload + '#Intent;scheme=gymrot;package=' + PACKAGE
+        + ';S.browser_fallback_url=' + encodeURIComponent(PLAY) + ';end';
+      row.appendChild(open);
+    }
+    var get = el('a', 'button cond', ANDROID ? 'Get GymRot' : 'GymRot on Google Play');
+    get.href = PLAY;
+    row.appendChild(get);
+    return row;
+  }
+
+  function render(s, payload, metric) {
+    app.textContent = '';
+    document.title = s.name + '’s PRs on GymRot';
+    app.appendChild(el('h1', 'cond', s.name + '’s PRs'));
+
+    var bits = [];
+    // A date in the future is a phone with a wrong clock; better no date than a wrong one.
+    if (s.sentAt > 0 && s.sentAt < Date.now() + 86400000) {
+      bits.push('Sent ' + new Date(s.sentAt).toLocaleDateString(undefined,
+        { day: 'numeric', month: 'short', year: 'numeric' }));
+    }
+    bits.push(s.lifts.length + (s.lifts.length === 1 ? ' lift' : ' lifts'));
+    if (s.bodyweightKg > 0) bits.push(mass(s.bodyweightKg, metric) + ' bodyweight');
+    app.appendChild(el('div', 'meta', bits.join(' · ')));
+    if (s.buddy) {
+      app.appendChild(el('span', 'tag', 'Buddy: ' + LOOK_NAMES[s.buddy.look] + ', LV ' + s.buddy.level
+        + ' ' + STAGES[s.buddy.look][stage(s.buddy.level) - 1]));
+    }
+
+    app.appendChild(actions(payload));
+    if (!ANDROID) {
+      app.appendChild(el('p', 'meta', 'GymRot is an Android app. Open this link on Android with GymRot to put these PRs next to yours.'));
+    }
+
+    var head = el('div', 'head');
+    head.appendChild(el('h2', 'cond', 'Records'));
+    var units = el('div', 'units');
+    units.setAttribute('role', 'group');
+    units.setAttribute('aria-label', 'Units');
+    [['kg', true], ['lb', false]].forEach(function (u) {
+      var b = el('button', 'cond', u[0]);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(metric === u[1]));
+      b.addEventListener('click', function () { if (metric !== u[1]) render(s, payload, u[1]); });
+      units.appendChild(b);
+    });
+    head.appendChild(units);
+    app.appendChild(head);
+
+    if (!s.lifts.length) {
+      app.appendChild(el('p', null, s.name + ' did not include any lifts.'));
+      return;
+    }
+    var list = el('div', 'card');
+    s.lifts.forEach(function (l) {
+      var d = describe(l, metric);
+      var row = el('div', 'row');
+      var what = el('div', 'what');
+      what.appendChild(el('div', 'name', l.name));
+      what.appendChild(el('div', 'sub', d[1]));
+      row.appendChild(what);
+      row.appendChild(el('div', 'value cond', d[0]));
+      list.appendChild(row);
+    });
+    app.appendChild(list);
+  }
+
+  async function start() {
+    var hash = location.hash.replace(/^#/, '');
+    if (!hash) {
+      notice('No PRs in this link', 'This page shows a friend’s GymRot PRs, but the link has nothing after the #. Ask for the whole link again.');
+      return;
+    }
+    // Only the leading run of link characters, as the app reads it: a ")" or "." that a
+    // chat app kept on the end of the link must not break it.
+    var payload = hash.length > MAX_PAYLOAD ? '' : hash.match(/^[A-Za-z0-9_-]*/)[0];
+    if (!payload) {
+      notice('Broken link', 'That link is broken or cut off. Ask your friend to send it again.');
+      return;
+    }
+    if (typeof DecompressionStream === 'undefined' || typeof DataView.prototype.getBigInt64 !== 'function') {
+      notice('Browser too old', 'This browser cannot read the link. Open it in a current browser, or on your phone in GymRot.');
+      return;
+    }
+    try {
+      var s = parse(await inflate(fromBase64(payload)));
+      render(s, payload, s.metric);
+    } catch (e) {
+      if (!(e instanceof LinkError)) throw e;
+      if (e.newer) {
+        notice('Newer link', 'This link was made by a newer GymRot. Update the app to open it.');
+      } else {
+        notice('Broken link', 'That link is broken or cut off. Ask your friend to send it again.');
+      }
+    }
+  }
+
+  window.addEventListener('hashchange', start);
+  start();
+})();
+</script>
+</body>
+</html>

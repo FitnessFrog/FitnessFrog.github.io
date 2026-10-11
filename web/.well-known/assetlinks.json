@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.gymrot.app",
+      "sha256_cert_fingerprints": [
+        "A3:B4:8F:F3:42:FC:E6:FA:D7:CC:28:AA:D0:C4:D2:0C:CC:3B:69:42:4B:3C:D5:B3:35:0E:88:5D:64:E2:32:E8"
+      ]
+    }
+  }
+]
