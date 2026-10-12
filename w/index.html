@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="referrer" content="no-referrer">
+  <title>A workout on GymRot</title>
+  <meta name="theme-color" content="#F4F4F0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="../c/style.css">
+  <style>
+    .row .day { width: 96px; flex-shrink: 0; font-weight: 700; color: var(--ink-3); font-size: 14px; }
+    .row .rest { color: var(--ink-3); }
+    h2.workout { margin-top: 28px; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="kicker" id="kicker">GymRot</div>
+  <div id="app">
+    <noscript><p>Turn on JavaScript to see this workout, or open the link on an Android phone with GymRot.</p></noscript>
+  </div>
+  <footer>The workout travels inside the link itself, after the #. Browsers never send that part to a server, so this page reads it on your device and nothing leaves it.</footer>
+</main>
+<script>
+// Reads a GymRot workout or split link. Same layout as ShareCodec.java (format version 1):
+// u8 version, u8 kind (1 workout, 2 split), text sender, text title, u8 workouts, then per
+// workout: text name, u8 items, then per item: text slug, text name, text muscleGroup,
+// text equipment, u8 track (0 weight and reps, 1 time, 2 distance and time), u8 sets,
+// u16 target, u16 rest seconds. Split only: 7 x u8 day (255 rest, else a workout index).
+// Text is a u8 length plus UTF-8. The bytes are raw deflate, then URL-safe base64.
+// Change both files together.
+(function () {
+  'use strict';
+
+  var VERSION = 1;
+  var MAX_WORKOUTS = 7;
+  var MAX_ITEMS = 40;
+  var MAX_SETS = 99;
+  var MAX_TARGET = 9999;
+  var MAX_REST = 3600;
+  var REST_DAY = 255;
+  var MAX_INFLATED = 128 * 1024;
+  var MAX_PAYLOAD = 64 * 1024;
+  var PACKAGE = 'com.gymrot.app';
+  var PLAY = 'https://play.google.com/store/apps/details?id=' + PACKAGE;
+  var DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  var app = document.getElementById('app');
+  var kicker = document.getElementById('kicker');
+  // Android, including Chrome's "Desktop site" mode on big tablets (see the compare page).
+  var UA = navigator.userAgent;
+  var ANDROID = /Android/i.test(UA) || (/Linux/.test(UA) && !/CrOS/.test(UA) && navigator.maxTouchPoints > 0
+    && !(window.matchMedia && window.matchMedia('(any-pointer: fine)').matches));
+
+  function LinkError(newer) { this.newer = newer; }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text; // never innerHTML: names come from the link
+    return e;
+  }
+
+  /** What Java's String.trim() removes: every character up to the space. */
+  function javaTrim(s) {
+    var a = 0;
+    var b = s.length;
+    while (a < b && s.charCodeAt(a) <= 32) a++;
+    while (b > a && s.charCodeAt(b - 1) <= 32) b--;
+    return s.slice(a, b);
+  }
+
+  function fromBase64(s) {
+    if (!/^[A-Za-z0-9_-]+$/.test(s)) throw new LinkError(false);
+    var b = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (b.length % 4) b += '=';
+    var bin;
+    try { bin = atob(b); } catch (e) { throw new LinkError(false); }
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function inflate(bytes) {
+    var reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+    var chunks = [];
+    var size = 0;
+    try {
+      for (;;) {
+        var r = await reader.read();
+        if (r.done) break;
+        size += r.value.length;
+        if (size > MAX_INFLATED) { reader.cancel(); throw new LinkError(false); }
+        chunks.push(r.value);
+      }
+    } catch (e) {
+      throw e instanceof LinkError ? e : new LinkError(false); // truncated or not deflate
+    }
+    var out = new Uint8Array(size);
+    var at = 0;
+    chunks.forEach(function (c) { out.set(c, at); at += c.length; });
+    return out;
+  }
+
+  function Reader(bytes) {
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var at = 0;
+    var utf8 = new TextDecoder('utf-8', { ignoreBOM: true }); // keep a BOM, as Java does
+    function need(n) { if (at + n > view.byteLength) throw new LinkError(false); }
+    this.u8 = function () { need(1); return view.getUint8(at++); };
+    this.u16 = function () { need(2); var v = view.getUint16(at); at += 2; return v; };
+    this.text = function () {
+      var n = this.u8();
+      need(n);
+      var s = utf8.decode(new Uint8Array(view.buffer, view.byteOffset + at, n));
+      at += n;
+      return javaTrim(s);
+    };
+    this.done = function () { return at === view.byteLength; };
+  }
+
+  function parse(bytes) {
+    var r = new Reader(bytes);
+    var version = r.u8();
+    if (version > VERSION) throw new LinkError(true);
+    if (version < 1) throw new LinkError(false);
+    var p = { kind: r.u8(), workouts: [], days: [] };
+    if (p.kind !== 1 && p.kind !== 2) throw new LinkError(false);
+    p.sender = r.text();
+    p.title = r.text();
+    if (!p.title) throw new LinkError(false);
+    var count = r.u8();
+    if (count < 1 || count > (p.kind === 2 ? MAX_WORKOUTS : 1)) throw new LinkError(false);
+    for (var w = 0; w < count; w++) {
+      var workout = { name: r.text(), items: [] };
+      if (!workout.name) throw new LinkError(false);
+      var items = r.u8();
+      if (items > MAX_ITEMS) throw new LinkError(false);
+      for (var i = 0; i < items; i++) {
+        var it = { slug: r.text(), name: r.text(), group: r.text(), equipment: r.text(), track: r.u8(),
+          sets: r.u8(), target: r.u16(), rest: r.u16() };
+        if (it.track > 2 || !it.name || it.sets < 1 || it.sets > MAX_SETS || it.target > MAX_TARGET
+          || it.rest > MAX_REST) throw new LinkError(false);
+        workout.items.push(it);
+      }
+      p.workouts.push(workout);
+    }
+    if (p.kind === 2) {
+      for (var d = 0; d < 7; d++) {
+        var day = r.u8();
+        if (day !== REST_DAY && day >= count) throw new LinkError(false);
+        p.days.push(day === REST_DAY ? -1 : day);
+      }
+    }
+    if (!r.done()) throw new LinkError(false);
+    return p;
+  }
+
+  // ------------------------------------------------------------------ formatting (as in the app)
+
+  function seconds(s) {
+    if (s < 60) return s + ' s';
+    var sec = s % 60;
+    return Math.floor(s / 60) + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+  function rest(s) {
+    var sec = s % 60;
+    return Math.floor(s / 60) + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+  function target(it) {
+    if (it.track === 2) return it.sets > 1 ? it.sets + ' × ' + it.target + ' min' : it.target + ' min';
+    if (it.track === 1) return it.sets + ' × ' + seconds(it.target);
+    return it.sets + ' × ' + it.target;
+  }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  // ------------------------------------------------------------------ page
+
+  function notice(title, body) {
+    app.textContent = '';
+    app.appendChild(el('h1', 'cond', title));
+    var box = el('div', 'notice');
+    box.appendChild(el('p', null, body));
+    app.appendChild(box);
+    app.appendChild(actions(null));
+  }
+
+  function actions(payload) {
+    var row = el('div', 'actions');
+    if (payload && ANDROID) {
+      var open = el('a', 'button primary cond', 'Open in GymRot');
+      open.href = 'intent://w/' + payload + '#Intent;scheme=gymrot;package=' + PACKAGE
+        + ';S.browser_fallback_url=' + encodeURIComponent(PLAY) + ';end';
+      row.appendChild(open);
+    }
+    var get = el('a', 'button cond', ANDROID ? 'Get GymRot' : 'GymRot on Google Play');
+    get.href = PLAY;
+    row.appendChild(get);
+    return row;
+  }
+
+  function exercises(workout) {
+    var list = el('div', 'card');
+    if (!workout.items.length) {
+      var empty = el('div', 'row');
+      empty.appendChild(el('div', 'what rest', 'No exercises yet.'));
+      list.appendChild(empty);
+    }
+    workout.items.forEach(function (it) {
+      var row = el('div', 'row');
+      var what = el('div', 'what');
+      what.appendChild(el('div', 'name', it.name));
+      var sub = [it.group, it.equipment].filter(Boolean);
+      if (it.rest > 0) sub.push(rest(it.rest) + ' rest');
+      what.appendChild(el('div', 'sub', sub.join(' · ')));
+      row.appendChild(what);
+      row.appendChild(el('div', 'value cond', target(it)));
+      list.appendChild(row);
+    });
+    return list;
+  }
+
+  function render(p, payload) {
+    app.textContent = '';
+    var split = p.kind === 2;
+    kicker.textContent = split ? 'GymRot split' : 'GymRot workout';
+    document.title = p.title + ' on GymRot';
+    app.appendChild(el('h1', 'cond', p.title));
+
+    var bits = [];
+    if (p.sender) bits.push('Shared by ' + p.sender);
+    if (split) {
+      var training = p.days.filter(function (d) { return d >= 0; }).length;
+      bits.push(plural(training, 'day a week', 'days a week'));
+      bits.push(plural(p.workouts.length, 'workout', 'workouts'));
+    } else {
+      var sets = 0;
+      p.workouts[0].items.forEach(function (it) { sets += it.sets; });
+      bits.push(plural(p.workouts[0].items.length, 'exercise', 'exercises'));
+      bits.push(plural(sets, 'set', 'sets'));
+    }
+    app.appendChild(el('div', 'meta', bits.join(' · ')));
+
+    app.appendChild(actions(payload));
+    if (!ANDROID) {
+      app.appendChild(el('p', 'meta', 'GymRot is an Android app. Open this link on Android with GymRot to add this '
+        + (split ? 'split' : 'workout') + ' to yours.'));
+    }
+
+    if (!split) {
+      app.appendChild(exercises(p.workouts[0]));
+      return;
+    }
+    app.appendChild(el('h2', 'cond', 'The week'));
+    var week = el('div', 'card');
+    p.days.forEach(function (d, i) {
+      var row = el('div', 'row');
+      row.appendChild(el('div', 'day', DAYS[i]));
+      row.appendChild(el('div', d >= 0 ? 'what name' : 'what rest', d >= 0 ? p.workouts[d].name : 'Rest'));
+      week.appendChild(row);
+    });
+    app.appendChild(week);
+    p.workouts.forEach(function (w) {
+      app.appendChild(el('h2', 'cond workout', w.name));
+      app.appendChild(exercises(w));
+    });
+  }
+
+  async function start() {
+    var hash = location.hash.replace(/^#/, '');
+    if (!hash) {
+      notice('Nothing in this link', 'This page shows a workout someone shared from GymRot, but the link has nothing after the #. Ask for the whole link again.');
+      return;
+    }
+    // Only the leading run of link characters, as the app reads it: a ")" or "." that a
+    // chat app kept on the end of the link must not break it.
+    var payload = hash.length > MAX_PAYLOAD ? '' : hash.match(/^[A-Za-z0-9_-]*/)[0];
+    if (!payload) {
+      notice('Broken link', 'That link is broken or cut off. Ask your friend to send it again.');
+      return;
+    }
+    if (typeof DecompressionStream === 'undefined') {
+      notice('Browser too old', 'This browser cannot read the link. Open it in a current browser, or on your phone in GymRot.');
+      return;
+    }
+    try {
+      render(parse(await inflate(fromBase64(payload))), payload);
+    } catch (e) {
+      if (!(e instanceof LinkError)) throw e;
+      if (e.newer) {
+        notice('Newer link', 'This link was made by a newer GymRot. Update the app to open it.');
+      } else {
+        notice('Broken link', 'That link is broken or cut off. Ask your friend to send it again.');
+      }
+    }
+  }
+
+  window.addEventListener('hashchange', start);
+  start();
+})();
+</script>
+</body>
+</html>
