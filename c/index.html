@@ -5,21 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <meta name="referrer" content="no-referrer">
-  <title>PRs on GymRot</title>
+  <title>PRs on FitnessFrog</title>
   <meta name="theme-color" content="#F4F4F0" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
-  <div class="kicker">GymRot PRs</div>
+  <div class="kicker">FitnessFrog PRs</div>
   <div id="app">
-    <noscript><p>Turn on JavaScript to see these PRs, or open the link on an Android phone with GymRot.</p></noscript>
+    <noscript><p>Turn on JavaScript to see these PRs, or open the link on an Android phone with FitnessFrog.</p></noscript>
   </div>
   <footer>The PRs travel inside the link itself, after the #. Browsers never send that part to a server, so this page reads them on your device and nothing leaves it.</footer>
 </main>
 <script>
-// Reads a GymRot compare link. Same layout as CompareCodec.java (format version 1):
+// Reads a FitnessFrog compare link. Same layout as CompareCodec.java (format version 1):
 // u8 version, i64 senderId, text name, i64 sentAt, u8 flags (1 metric, 2 bodyweight, 4 buddy),
 // [f32 bodyweightKg], [u8 look, u16 level, u8 arms, u8 chest, u8 legs], u8 count, then per lift:
 // text slug, text name, u8 track and weight: f32 kg, u16 reps, f32 e1rm, u16 maxReps |
@@ -33,7 +33,7 @@
   var MAX_PAYLOAD = 64 * 1024;
   var LB_PER_KG = 2.2046226218;
   var M_PER_MI = 1609.344;
-  var PACKAGE = 'com.gymrot.app';
+  var PACKAGE = 'com.fitnessfrog.app';
   var PLAY = 'https://play.google.com/store/apps/details?id=' + PACKAGE;
   var LOOKS = ['rat', 'gloop', 'cluck'];
   var LOOK_NAMES = { rat: 'Gym Rat', gloop: 'Gloop', cluck: 'Cluck' };
@@ -201,7 +201,7 @@
 
   function notice(title, body) {
     app.textContent = '';
-    document.title = 'PRs on GymRot';
+    document.title = 'PRs on FitnessFrog';
     app.appendChild(el('h1', 'cond', title));
     var box = el('div', 'notice');
     box.appendChild(el('p', null, body));
@@ -212,12 +212,12 @@
   function actions(payload) {
     var row = el('div', 'actions');
     if (payload && ANDROID) {
-      var open = el('a', 'button primary cond', 'Open in GymRot');
+      var open = el('a', 'button primary cond', 'Open in FitnessFrog');
       open.href = 'intent://c/' + payload + '#Intent;scheme=gymrot;package=' + PACKAGE
         + ';S.browser_fallback_url=' + encodeURIComponent(PLAY) + ';end';
       row.appendChild(open);
     }
-    var get = el('a', 'button cond', ANDROID ? 'Get GymRot' : 'GymRot on Google Play');
+    var get = el('a', 'button cond', ANDROID ? 'Get FitnessFrog' : 'FitnessFrog on Google Play');
     get.href = PLAY;
     row.appendChild(get);
     return row;
@@ -225,7 +225,7 @@
 
   function render(s, payload, metric) {
     app.textContent = '';
-    document.title = s.name + '’s PRs on GymRot';
+    document.title = s.name + '’s PRs on FitnessFrog';
     app.appendChild(el('h1', 'cond', s.name + '’s PRs'));
 
     var bits = [];
@@ -244,7 +244,7 @@
 
     app.appendChild(actions(payload));
     if (!ANDROID) {
-      app.appendChild(el('p', 'meta', 'GymRot is an Android app. Open this link on Android with GymRot to put these PRs next to yours.'));
+      app.appendChild(el('p', 'meta', 'FitnessFrog is an Android app. Open this link on Android with FitnessFrog to put these PRs next to yours.'));
     }
 
     var head = el('div', 'head');
@@ -283,7 +283,7 @@
   async function start() {
     var hash = location.hash.replace(/^#/, '');
     if (!hash) {
-      notice('No PRs in this link', 'This page shows a friend’s GymRot PRs, but the link has nothing after the #. Ask for the whole link again.');
+      notice('No PRs in this link', 'This page shows a friend’s FitnessFrog PRs, but the link has nothing after the #. Ask for the whole link again.');
       return;
     }
     // Only the leading run of link characters, as the app reads it: a ")" or "." that a
@@ -294,7 +294,7 @@
       return;
     }
     if (typeof DecompressionStream === 'undefined' || typeof DataView.prototype.getBigInt64 !== 'function') {
-      notice('Browser too old', 'This browser cannot read the link. Open it in a current browser, or on your phone in GymRot.');
+      notice('Browser too old', 'This browser cannot read the link. Open it in a current browser, or on your phone in FitnessFrog.');
       return;
     }
     try {
@@ -303,7 +303,7 @@
     } catch (e) {
       if (!(e instanceof LinkError)) throw e;
       if (e.newer) {
-        notice('Newer link', 'This link was made by a newer GymRot. Update the app to open it.');
+        notice('Newer link', 'This link was made by a newer FitnessFrog. Update the app to open it.');
       } else {
         notice('Broken link', 'That link is broken or cut off. Ask your friend to send it again.');
       }

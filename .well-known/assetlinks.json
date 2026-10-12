@@ -1,6 +1,32 @@
 [
   {
-    "relation": ["delegate_permission/common.handle_all_urls"],
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.fitnessfrog.app",
+      "sha256_cert_fingerprints": [
+        "62:77:E0:BE:66:88:02:9C:CF:3A:7B:A8:B3:E1:86:6B:D8:93:25:2B:0C:DD:9F:4F:B9:BA:A2:7A:51:94:E6:96"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.fitnessfrog.app.debug",
+      "sha256_cert_fingerprints": [
+        "A3:B4:8F:F3:42:FC:E6:FA:D7:CC:28:AA:D0:C4:D2:0C:CC:3B:69:42:4B:3C:D5:B3:35:0E:88:5D:64:E2:32:E8"
+      ]
+    }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
     "target": {
       "namespace": "android_app",
       "package_name": "com.gymrot.app",
